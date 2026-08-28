@@ -170,7 +170,7 @@ public class EntityStatement {
                 placeholders.add("?");
             }
 
-            String query = "SELECT rowid,data FROM " + ConfigHandler.prefix + "entity WHERE rowid IN(" + placeholders + ")";
+            String query = "SELECT rowid AS id,data FROM " + ConfigHandler.prefix + "entity WHERE rowid IN(" + placeholders + ")";
             try (PreparedStatement preparedStatement = connection.prepareStatement(query)) {
                 for (int index = offset; index < end; index++) {
                     preparedStatement.setInt(index - offset + 1, ids.get(index));
@@ -179,7 +179,7 @@ public class EntityStatement {
                     while (resultSet.next()) {
                         List<Object> data = readData(resultSet, "data", Kind.ENTITY);
                         if (!data.isEmpty()) {
-                            result.put(resultSet.getInt("rowid"), data);
+                            result.put(resultSet.getInt("id"), data);
                         }
                     }
                 }
@@ -208,15 +208,7 @@ public class EntityStatement {
     }
 
     public static List<Object> readData(ResultSet resultSet, String column, Kind kind) throws SQLException {
-        byte[] data;
-        if (ConfigHandler.databaseType.isColumnar()) {
-            String text = resultSet.getString(column);
-            data = text == null ? null : EntityDataCodec.fromText(text);
-        }
-        else {
-            data = DatabaseUtils.getBytes(resultSet, column);
-        }
-        return deserializeData(data, kind);
+        return deserializeData(DatabaseUtils.getBytes(resultSet, column), kind);
     }
 
     private static List<Object> deserializeDataStrict(byte[] data, Kind kind) throws Exception {

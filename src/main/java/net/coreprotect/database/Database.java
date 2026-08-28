@@ -30,6 +30,7 @@ import net.coreprotect.consumer.process.Process;
 import net.coreprotect.database.clickhouse.ClickHouseConsumerWriteBatch;
 import net.coreprotect.database.clickhouse.ClickHouseDatabase;
 import net.coreprotect.database.clickhouse.ClickHouseJdbcConfig;
+import net.coreprotect.database.statement.UserStatement;
 import net.coreprotect.language.Phrase;
 import net.coreprotect.listener.player.InventoryChangeListener;
 import net.coreprotect.model.BlockGroup;
@@ -63,6 +64,7 @@ public class Database extends Queue {
     public static final int DATABASE_LOCK_INACTIVE = 0;
     public static final int DATABASE_LOCK_ACTIVE = 1;
     public static final int DATABASE_LOCK_MIGRATION_INCOMPLETE = 2;
+    public static final int DUCKDB_BLOCK_SIZE = 128 * 1024;
 
     private static final int ROLLED_BACK_UPDATE_BATCH_SIZE = 1000;
     private static final int DUCKDB_ROLLED_BACK_UPDATE_BATCH_SIZE = 5000;
@@ -597,6 +599,18 @@ public class Database extends Queue {
         return new RelationalConsumerWriteBatch(connection, ConfigHandler.databaseType);
     }
 
+    public static int nextClickHouseIdentifierId(ConsumerWriteBatch.ReferenceKind kind, String value, int currentMaximum) throws SQLException {
+        return requireClickHouseDatabase().nextIdentifierId(kind, value, currentMaximum);
+    }
+
+    public static String findClickHouseIdentifierValue(ConsumerWriteBatch.ReferenceKind kind, int id) throws SQLException {
+        return requireClickHouseDatabase().findIdentifierValue(kind, id);
+    }
+
+    public static int findClickHouseIdentifierId(ConsumerWriteBatch.ReferenceKind kind, String value) throws SQLException {
+        return requireClickHouseDatabase().findIdentifierId(kind, value);
+    }
+
     public static void recordDatabaseVersion(Statement statement, String version) throws SQLException {
         if (ConfigHandler.databaseType.isClickHouse()) {
             requireClickHouseDatabase().updateCoreVersion(version);
@@ -607,6 +621,9 @@ public class Database extends Queue {
     }
 
     public static long purgeClickHouse(long startTime, long endTime, int worldId, List<Integer> blockTypes, boolean optimize) throws SQLException {
+        if (!Config.getGlobal().DATABASE_LOCK) {
+            throw new SQLException("ClickHouse purge requires database-lock to be enabled and every other CoreProtect installation sharing the database and prefix to be stopped");
+        }
         return requireClickHouseDatabase().purge(startTime, endTime, worldId, blockTypes, optimize);
     }
 
@@ -614,30 +631,6 @@ public class Database extends Queue {
         ClickHouseDatabase database = clickHouseDatabase;
         if (database != null) {
             database.cancelPurge();
-        }
-    }
-
-    public static void performRolledBackUpdate(Statement statement, int rolledBack, List<Long> rowIds, int table) {
-        String tableName = getRolledBackTableName(table);
-
-        try {
-            int listSize = rowIds.size();
-            int batchSize = getRolledBackUpdateBatchSize();
-            for (int startIndex = 0; startIndex < listSize; startIndex += batchSize) {
-                int endIndex = Math.min(startIndex + batchSize, listSize);
-                StringBuilder query = new StringBuilder("UPDATE " + ConfigHandler.prefix + tableName + " SET rolled_back='" + rolledBack + "' WHERE rowid IN(");
-                for (int index = startIndex; index < endIndex; index++) {
-                    if (index > startIndex) {
-                        query.append(",");
-                    }
-                    query.append(rowIds.get(index).longValue());
-                }
-                query.append(")");
-                statement.executeUpdate(query.toString());
-            }
-        }
-        catch (Exception e) {
-            handleWriteFailure(e);
         }
     }
 
@@ -1209,6 +1202,7 @@ public class Database extends Queue {
     private static synchronized void closeClickHouseChecked() throws SQLException {
         ClickHouseDatabase database = clickHouseDatabase;
         clickHouseDatabase = null;
+        UserStatement.clearClickHouseCaches();
         if (database != null) {
             database.close();
         }
